@@ -91,7 +91,7 @@ class ChatServer:
     def connected_user_list(self):
         return [self.sock_to_name(sock) for sock in self.connection_list]
 
-    def handle_login(self, data, new_socket, address):
+    def login_handler(self, data, new_socket, address):
         login_auth_split = data.split(":::")
         username = login_auth_split[0]
         password = login_auth_split[1]
@@ -118,7 +118,7 @@ class ChatServer:
             new_socket.close()
             print "Login failed: Name: %s Reason: incorrect username or password!" % username
 
-    def handle_register(self, data):
+    def registration_handler(self, data):
         reg_details_split = data.split(":::")
         username = reg_details_split[0]
         password = reg_details_split[1]
@@ -130,7 +130,7 @@ class ChatServer:
         except database_handling.RegisterError as error:
             print error
 
-    def handle_msg(self, data, username, current_socket):
+    def message_handler(self, data, username, current_socket):
         if data.startswith("@"):
             send_to = data[1:data.index(" ")]
             data = data[data.index(" "):]
@@ -143,7 +143,7 @@ class ChatServer:
         else:
             self.broadcast_data(current_socket, "[%s] %s" % (username, data))
 
-    def handle_poke(self, data, username, current_socket):
+    def poke_handler(self, data, username, current_socket):
         send_to = data[:data.index(":::")]
         msg = data[data.index(":::") + 3:]
         data = username + ":::" + msg
@@ -166,9 +166,9 @@ class ChatServer:
                     (d_type, arg), data = struct.unpack("!II", recv_data[:8]), recv_data[8:]
 
                     if d_type == ReceiveTypeEnum.TYPE_LOGIN:
-                        self.handle_login(data, new_socket, address)
+                        self.login_handler(data, new_socket, address)
                     elif d_type == ReceiveTypeEnum.TYPE_REGISTER:
-                        self.handle_register(data)
+                        self.registration_handler(data)
                     else:
                         pass
                 else:
@@ -186,8 +186,8 @@ class ChatServer:
                         (d_type, arg), data = struct.unpack("!II", recv_data[:8]), recv_data[8:]
 
                         if d_type == ReceiveTypeEnum.TYPE_MSG:
-                            self.handle_msg(data, username, current_socket)
+                            self.message_handler(data, username, current_socket)
                         elif d_type == ReceiveTypeEnum.TYPE_COMMAND:  # command
                             pass
                         elif d_type == ReceiveTypeEnum.TYPE_POKE:
-                            self.handle_poke(data, username, current_socket)
+                            self.poke_handler(data, username, current_socket)
