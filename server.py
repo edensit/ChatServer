@@ -140,6 +140,12 @@ class ChatServer:
                 self.send_msg(current_socket, "Could not find %s" % send_to, SendTypeEnum.TYPE_MSG)
             else:
                 self.send_msg(sock_to_send, "[%s to you] %s" % (username, data), SendTypeEnum.TYPE_MSG)
+        elif data.startswith("!"):  # command
+            if self.find_client_instance(current_socket).is_admin is True:
+                pass
+            else:
+                self.send_msg(current_socket, "You do not have access to this command!", SendTypeEnum.TYPE_MSG)
+
         else:
             self.broadcast_data(current_socket, "[%s] %s" % (username, data))
 
