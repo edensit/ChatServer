@@ -6,7 +6,7 @@ import c_client
 import database_handling
 
 
-class RECV_ENUM:
+class ReceiveTypeEnum:
     TYPE_LOGIN = 1
     TYPE_REGISTER = 2
     TYPE_MSG = 3
@@ -14,13 +14,13 @@ class RECV_ENUM:
     TYPE_POKE = 5
 
 
-class SEND_ENUM:
+class SendTypeEnum:
     TYPE_MSG = 1
     TYPE_USER_LIST = 2
     TYPE_POKE = 3
 
 
-class LOGIN_ENUM:
+class LoginAuthStateEnum:
     CORRECT_AUTH = 1
     INCORRECT_AUTH = 2
     ALREADY_CONNECTED = 3
@@ -59,7 +59,7 @@ class ChatServer:
         except ValueError:
             pass
 
-    def broadcast_data(self, sock, msg, d_type=SEND_ENUM.TYPE_MSG):
+    def broadcast_data(self, sock, msg, d_type=SendTypeEnum.TYPE_MSG):
         for current_socket in self.connection_list:
             if current_socket != self.chat_server_socket and current_socket != sock:
                 try:
@@ -103,18 +103,18 @@ class ChatServer:
                 self.client_list.append(c_client.Client(username, new_socket))
                 self.broadcast_data(new_socket, "%s connected to the server" % username)
 
-                self.send_msg(new_socket, "", LOGIN_ENUM.CORRECT_AUTH)
+                self.send_msg(new_socket, "", LoginAuthStateEnum.CORRECT_AUTH)
                 print "Login successful: %s %s connected to the server" % (username, address)
 
                 users_list = self.connected_user_list()
-                self.broadcast_data(new_socket, cPickle.dumps(users_list), SEND_ENUM.TYPE_USER_LIST)
-                self.send_msg(new_socket, cPickle.dumps(users_list), SEND_ENUM.TYPE_USER_LIST)
+                self.broadcast_data(new_socket, cPickle.dumps(users_list), SendTypeEnum.TYPE_USER_LIST)
+                self.send_msg(new_socket, cPickle.dumps(users_list), SendTypeEnum.TYPE_USER_LIST)
             else:
-                self.send_msg(new_socket, "already connected!", LOGIN_ENUM.ALREADY_CONNECTED)
+                self.send_msg(new_socket, "already connected!", LoginAuthStateEnum.ALREADY_CONNECTED)
                 new_socket.close()
                 print "Login failed: %s connected to the server" % username
         else:
-            self.send_msg(new_socket, "Incorrect username or password!", LOGIN_ENUM.INCORRECT_AUTH)
+            self.send_msg(new_socket, "Incorrect username or password!", LoginAuthStateEnum.INCORRECT_AUTH)
             new_socket.close()
             print "Login failed: Name: %s Reason: incorrect username or password!" % username
 
@@ -137,9 +137,9 @@ class ChatServer:
             try:
                 sock_to_send = self.find_sock_by_name(send_to)
             except ValueError:
-                self.send_msg(current_socket, "Could not find %s" % send_to, SEND_ENUM.TYPE_MSG)
+                self.send_msg(current_socket, "Could not find %s" % send_to, SendTypeEnum.TYPE_MSG)
             else:
-                self.send_msg(sock_to_send, "[%s to you] %s" % (username, data), SEND_ENUM.TYPE_MSG)
+                self.send_msg(sock_to_send, "[%s to you] %s" % (username, data), SendTypeEnum.TYPE_MSG)
         else:
             self.broadcast_data(current_socket, "[%s] %s" % (username, data))
 
@@ -151,10 +151,10 @@ class ChatServer:
         try:
             sock_to_poke = self.find_sock_by_name(send_to)
         except ValueError:
-            self.send_msg(current_socket, "Could not find %s" % send_to, SEND_ENUM.TYPE_MSG)
+            self.send_msg(current_socket, "Could not find %s" % send_to, SendTypeEnum.TYPE_MSG)
         else:
-            self.send_msg(sock_to_poke, data, SEND_ENUM.TYPE_POKE)
-            self.send_msg(current_socket, "You poked %s with message: %s" % (send_to, msg), SEND_ENUM.TYPE_MSG)
+            self.send_msg(sock_to_poke, data, SendTypeEnum.TYPE_POKE)
+            self.send_msg(current_socket, "You poked %s with message: %s" % (send_to, msg), SendTypeEnum.TYPE_MSG)
 
     def run(self):
         while True:
@@ -165,9 +165,9 @@ class ChatServer:
                     recv_data = new_socket.recv(1024).strip()
                     (d_type, arg), data = struct.unpack("!II", recv_data[:8]), recv_data[8:]
 
-                    if d_type == RECV_ENUM.TYPE_LOGIN:
+                    if d_type == ReceiveTypeEnum.TYPE_LOGIN:
                         self.handle_login(data, new_socket, address)
-                    elif d_type == RECV_ENUM.TYPE_REGISTER:
+                    elif d_type == ReceiveTypeEnum.TYPE_REGISTER:
                         self.handle_register(data)
                     else:
                         pass
@@ -181,13 +181,13 @@ class ChatServer:
                         self.close_connection(current_socket)
 
                         users_list = self.connected_user_list()
-                        self.broadcast_data(current_socket, cPickle.dumps(users_list), SEND_ENUM.TYPE_USER_LIST)
+                        self.broadcast_data(current_socket, cPickle.dumps(users_list), SendTypeEnum.TYPE_USER_LIST)
                     else:
                         (d_type, arg), data = struct.unpack("!II", recv_data[:8]), recv_data[8:]
 
-                        if d_type == RECV_ENUM.TYPE_MSG:
+                        if d_type == ReceiveTypeEnum.TYPE_MSG:
                             self.handle_msg(data, username, current_socket)
-                        elif d_type == RECV_ENUM.TYPE_COMMAND:  # command
+                        elif d_type == ReceiveTypeEnum.TYPE_COMMAND:  # command
                             pass
-                        elif d_type == RECV_ENUM.TYPE_POKE:
+                        elif d_type == ReceiveTypeEnum.TYPE_POKE:
                             self.handle_poke(data, username, current_socket)
