@@ -1,9 +1,16 @@
-import socket
-import select
-import struct
 import cPickle
-import c_client
-import database_handling
+import select
+import socket
+import struct
+import chat_client
+from handlers import database_handling
+
+
+class UserDetailsTypeEnum:
+    IS_IN_DATABASE = 0
+    USERNAME = 1
+    IS_ADMIN = 2
+    IS_MUTED = 3
 
 
 class ReceiveTypeEnum:
@@ -26,6 +33,11 @@ class LoginAuthStateEnum:
     ALREADY_CONNECTED = 3
 
 
+class RegisterStateEnum:
+    CORRECT_REGISTER = 1
+    INCORRECT_REGISTER = 2
+
+
 class BaseError(Exception):
     pass
 
@@ -40,6 +52,16 @@ class ChatServer:
         self.chat_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.chat_server_socket.bind((self.HOST, self.PORT))
         self.chat_server_socket.listen(5)
+
+        self.COMMAND_SWITCH = {
+            "mute": self.mute_command_handler,
+            "kick": self.kick_command_handler,
+            "ban": self.ban_command_handler,
+            "unban": self.unban_command_handler,
+            "banslist": self.banlist_command_handler,
+            "addadmin": self.addadmin_command_handler,
+            "removeadmin": self.removeadmin_command_handler,
+            "adminslist": self.adminlist_command_handler, }
 
         self.client_list = []
         self.connection_list = [self.chat_server_socket]
@@ -60,12 +82,20 @@ class ChatServer:
             pass
 
     def broadcast_data(self, sock, msg, d_type=SendTypeEnum.TYPE_MSG):
-        for current_socket in self.connection_list:
-            if current_socket != self.chat_server_socket and current_socket != sock:
-                try:
-                    self.send_msg(current_socket, msg, d_type)
-                except socket.error:
-                    self.close_connection(current_socket)
+        try:
+            is_muted = self.find_client_instance(sock).is_muted
+        except ValueError:
+            is_muted = False
+
+        if not is_muted:
+            for current_socket in self.connection_list:
+                if current_socket != self.chat_server_socket and current_socket != sock:
+                    try:
+                        self.send_msg(current_socket, msg, d_type)
+                    except socket.error:
+                        self.close_connection(current_socket)
+        else:
+            self.send_msg(sock, "You are muted :)", d_type)
 
     def sock_to_name(self, sock):
         if sock is self.chat_server_socket:
@@ -74,37 +104,42 @@ class ChatServer:
             for client in self.client_list:
                 if client.sock is sock:
                     return client.name
-            raise ValueError("Could not find %s in %s" % (sock, "client_list"))
+            raise ValueError("Could not find {0} in {1}".format(sock, "client_list"))
 
     def find_client_instance(self, sock):
         for client in self.client_list:
             if client.sock is sock:
                 return client
-            raise ValueError("Could not find %s in %s" % (sock, "client_list"))
+        raise ValueError("Could not find {0} in {1}".format(sock, "client_list"))
 
     def find_sock_by_name(self, name):
         for client in self.client_list:
             if client.name == name:
                 return client.sock
-        raise ValueError("Could not find %s in %s" % (name, "client_list"))
+        raise ValueError("Could not find {0} in {1}".format(name, "client_list"))
 
     def connected_user_list(self):
         return [self.sock_to_name(sock) for sock in self.connection_list]
 
-    def login_handler(self, data, new_socket, address):
+    def login_handler(self, data, new_socket, address):  # Rewrite!
         login_auth_split = data.split(":::")
         username = login_auth_split[0]
         password = login_auth_split[1]
-        print data + ", " + username + ", " + password
+        print "Connection attempt: [ Username: {0} Password: {1} ] Received data: {2}".format(username, password, data)
 
-        if self.database_handler.is_correct_login(username, password):
+        auth = self.database_handler.is_correct_login(username, password)
+        if auth[UserDetailsTypeEnum.IS_IN_DATABASE]:
+            username = auth[UserDetailsTypeEnum.USERNAME]
             if username not in self.connected_user_list():
+                if auth[UserDetailsTypeEnum.IS_ADMIN]:
+                    username = "[Admin] {0}".format(username)
                 self.connection_list.append(new_socket)
-                self.client_list.append(c_client.Client(username, new_socket))
-                self.broadcast_data(new_socket, "%s connected to the server" % username)
+                self.client_list.append(chat_client.Client(username, new_socket, auth[UserDetailsTypeEnum.IS_ADMIN],
+                                                           auth[UserDetailsTypeEnum.IS_MUTED]))
+                self.broadcast_data(new_socket, "{0} connected to the server".format(username))
 
                 self.send_msg(new_socket, "", LoginAuthStateEnum.CORRECT_AUTH)
-                print "Login successful: %s %s connected to the server" % (username, address)
+                print "Login successful: {0} {1} connected to the server".format(username, address)
 
                 users_list = self.connected_user_list()
                 self.broadcast_data(new_socket, cPickle.dumps(users_list), SendTypeEnum.TYPE_USER_LIST)
@@ -112,42 +147,100 @@ class ChatServer:
             else:
                 self.send_msg(new_socket, "already connected!", LoginAuthStateEnum.ALREADY_CONNECTED)
                 new_socket.close()
-                print "Login failed: %s connected to the server" % username
+                print "Login failed: {0} connected to the server".format(username)
         else:
             self.send_msg(new_socket, "Incorrect username or password!", LoginAuthStateEnum.INCORRECT_AUTH)
             new_socket.close()
-            print "Login failed: Name: %s Reason: incorrect username or password!" % username
+            print "Login failed: Name: {0} Reason: incorrect username or password!".format(username)
 
-    def registration_handler(self, data):
-        reg_details_split = data.split(":::")
-        username = reg_details_split[0]
-        password = reg_details_split[1]
-        mail = reg_details_split[2]
-        print data + ", " + username + ", " + password + ", " + mail
+    def registration_handler(self, data, new_socket, address):
+        register_details_split = data.split(":::")
+        username = register_details_split[0]
+        password = register_details_split[1]
+        print "Registration attempt: [ Username: {0} Password: {1} ] Received data: {2}".format(username, password, data)
 
         try:
             self.database_handler.insert_new_user(username, password)
         except database_handling.RegisterError as error:
             print error
+            self.send_msg(new_socket, "Bad registration", RegisterStateEnum.INCORRECT_REGISTER)
+            print "Unsuccessfully registered: Name: {0} Address: {1} Reason: {2}".format(username, address, error)
+            new_socket.close()
+        else:
+            self.send_msg(new_socket, "You have successfully registered.", RegisterStateEnum.CORRECT_REGISTER)
+            print "Successfully registered: Name: {0} Address: {1}".format(username, address)
+            new_socket.close()
+
+    def private_massage_handler(self, data, username, current_socket):
+        send_to = data[1:data.index(" ")]
+        data = data[data.index(" "):]
+        try:
+            sock_to_send = self.find_sock_by_name(send_to)
+        except ValueError:
+            self.send_msg(current_socket, "Could not find {0}".format(send_to), SendTypeEnum.TYPE_MSG)
+        else:
+            self.send_msg(sock_to_send, "[{0} to you] {1}".format(username, data), SendTypeEnum.TYPE_MSG)
+
+    def mute_command_handler(self, args, admin_socket):
+        args = args.strip()
+        try:
+            client_socket = self.find_sock_by_name(args)
+            is_muted = self.find_client_instance(client_socket).toggle_mute()
+        except ValueError:
+            self.send_msg(admin_socket, "Could not find {0}".format(args), SendTypeEnum.TYPE_MSG)
+        else:
+            if is_muted:
+                self.send_msg(admin_socket, "{0} have been muted!".format(args), SendTypeEnum.TYPE_MSG)
+                self.send_msg(client_socket, "You have been muted!".format(args), SendTypeEnum.TYPE_MSG)
+            else:
+                self.send_msg(admin_socket, "{0} have been unmuted!".format(args), SendTypeEnum.TYPE_MSG)
+                self.send_msg(client_socket, "You have been unmuted!".format(args), SendTypeEnum.TYPE_MSG)
+
+    def kick_command_handler(self, args, admin_socket):
+        pass
+
+    def ban_command_handler(self, args, admin_socket):
+        pass
+
+    def unban_command_handler(self, args, admin_socket):
+        pass
+
+    def banlist_command_handler(self, args, admin_socket):
+        pass
+
+    def addadmin_command_handler(self, args, admin_socket):
+        pass
+
+    def removeadmin_command_handler(self, args, admin_socket):
+        pass
+
+    def adminlist_command_handler(self, args, admin_socket):
+        pass
+
+    def raw_command_handler(self, data, current_socket):
+        try:
+            command = data[1:data.index(" ")]
+            args = data[data.index(" "):]
+        except ValueError as Error:
+            self.send_msg(current_socket, "The syntax of the command is incorrect."
+                                          " Use the following syntax: ![command] [arg]", SendTypeEnum.TYPE_MSG)
+        else:
+            if command.lower() in self.COMMAND_SWITCH:
+                hi = self.find_client_instance(current_socket)
+                if hi.is_admin:
+                    self.COMMAND_SWITCH[command.lower()](args, current_socket)
+                else:
+                    self.send_msg(current_socket, "You do not have access to this command!", SendTypeEnum.TYPE_MSG)
+            else:
+                self.send_msg(current_socket, "Unknown Command!", SendTypeEnum.TYPE_MSG)
 
     def message_handler(self, data, username, current_socket):
-        if data.startswith("@"):
-            send_to = data[1:data.index(" ")]
-            data = data[data.index(" "):]
-            try:
-                sock_to_send = self.find_sock_by_name(send_to)
-            except ValueError:
-                self.send_msg(current_socket, "Could not find %s" % send_to, SendTypeEnum.TYPE_MSG)
-            else:
-                self.send_msg(sock_to_send, "[%s to you] %s" % (username, data), SendTypeEnum.TYPE_MSG)
+        if data.startswith("@"):  # private massage
+            self.private_massage_handler(data, username, current_socket)
         elif data.startswith("!"):  # command
-            if self.find_client_instance(current_socket).is_admin is True:
-                pass
-            else:
-                self.send_msg(current_socket, "You do not have access to this command!", SendTypeEnum.TYPE_MSG)
-
+            self.raw_command_handler(data, current_socket)
         else:
-            self.broadcast_data(current_socket, "[%s] %s" % (username, data))
+            self.broadcast_data(current_socket, "[{0}] {1}".format(username, data))
 
     def poke_handler(self, data, username, current_socket):
         send_to = data[:data.index(":::")]
@@ -157,12 +250,12 @@ class ChatServer:
         try:
             sock_to_poke = self.find_sock_by_name(send_to)
         except ValueError:
-            self.send_msg(current_socket, "Could not find %s" % send_to, SendTypeEnum.TYPE_MSG)
+            self.send_msg(current_socket, "Could not find {0}".format(send_to), SendTypeEnum.TYPE_MSG)
         else:
             self.send_msg(sock_to_poke, data, SendTypeEnum.TYPE_POKE)
-            self.send_msg(current_socket, "You poked %s with message: %s" % (send_to, msg), SendTypeEnum.TYPE_MSG)
+            self.send_msg(current_socket, "You poked {0} with message: {1}".format(send_to, msg), SendTypeEnum.TYPE_MSG)
 
-    def run(self):
+    def run(self):  # Rewrite!
         while True:
             rlist, wlist, xlist = select.select(self.connection_list, [], [])
             for current_socket in rlist:
@@ -174,7 +267,7 @@ class ChatServer:
                     if d_type == ReceiveTypeEnum.TYPE_LOGIN:
                         self.login_handler(data, new_socket, address)
                     elif d_type == ReceiveTypeEnum.TYPE_REGISTER:
-                        self.registration_handler(data)
+                        self.registration_handler(data, new_socket, address)
                     else:
                         pass
                 else:
@@ -182,8 +275,8 @@ class ChatServer:
                     try:
                         recv_data = current_socket.recv(1024)
                     except socket.error:
-                        self.broadcast_data(current_socket, "%s left the server" % username)
-                        print "%s %s left the server" % (username, address)
+                        self.broadcast_data(current_socket, "{0} left the server".format(username))
+                        print "{0} {1} left the server".format(username, address)
                         self.close_connection(current_socket)
 
                         users_list = self.connected_user_list()
